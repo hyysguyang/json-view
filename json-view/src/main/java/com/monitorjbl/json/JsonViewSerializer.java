@@ -572,6 +572,9 @@ public class JsonViewSerializer extends JsonSerializer<JsonView> {
      */
     boolean annotatedWithIgnore(AccessibleProperty f) {
       return memoizer.annotatedWithIgnore(f, () -> {
+        JsonProperty jsonProperty = getAnnotation(f, JsonProperty.class);
+        boolean writeOnly= jsonProperty!=null && jsonProperty.access()==JsonProperty.Access.WRITE_ONLY;
+
         JsonIgnore jsonIgnore = getAnnotation(f, JsonIgnore.class);
         JsonIgnoreProperties classIgnoreProperties = getAnnotation(f.declaringClass, JsonIgnoreProperties.class);
         JsonIgnoreProperties fieldIgnoreProperties = null;
@@ -593,7 +596,7 @@ public class JsonViewSerializer extends JsonSerializer<JsonView> {
           }
         }
 
-        return (jsonIgnore != null && jsonIgnore.value()) ||
+        return writeOnly || (jsonIgnore != null && jsonIgnore.value()) ||
             (classIgnoreProperties != null && asList(classIgnoreProperties.value()).contains(f.name)) ||
             (fieldIgnoreProperties != null && asList(fieldIgnoreProperties.value()).contains(f.name)) ||
             backReferenced;
@@ -635,7 +638,13 @@ public class JsonViewSerializer extends JsonSerializer<JsonView> {
         };
 
         getDeclaredFields(cls).stream()
-            .map(f -> new AccessibleProperty(f.getName(), f.getAnnotations(), f))
+            .map(f ->{
+              Annotation[] annotations = new Annotation[0];
+              try {
+                annotations=f.getDeclaringClass().getDeclaredField(f.getName()).getAnnotations();
+              } catch (NoSuchFieldException e) { }
+              return new AccessibleProperty(f.getName(), annotations, f);
+            })
             .forEach(p -> accessibleProperties.put(p.name, p));
         getDeclaredMethods(cls).stream()
             .filter(m -> m.getName().startsWith("get") && !m.getReturnType().equals(Void.class) && m.getParameters().length == 0)
@@ -656,6 +665,13 @@ public class JsonViewSerializer extends JsonSerializer<JsonView> {
               }
             });
 
+        getDeclaredMethods(cls).stream()
+                .filter(m -> !m.getName().startsWith("get") && m.isAnnotationPresent(JsonProperty.class))
+                .forEach(m -> {
+                  String fieldName = m.getAnnotation(JsonProperty.class).value();
+                  accessibleProperties.put(fieldName, new AccessibleProperty(fieldName, m.getAnnotations(), m));
+                });
+
         return accessibleProperties.values().stream()
             .filter(p -> visible.test(p.property))
             .collect(Collectors.toList());
@@ -670,7 +686,8 @@ public class JsonViewSerializer extends JsonSerializer<JsonView> {
       while(!parents.isEmpty()) {
         Class c = parents.pop();
 
-        Stream.of(c.getDeclaredFields()).forEach(f -> fields.add(f));
+        Stream<Field> parentFields = Stream.of(c.getDeclaredFields()).filter(field -> fields.stream().filter(f -> f.getName().equals(field.getName())).count() == 0);
+        parentFields.forEach(f -> fields.add(f));
 
         if(c.getSuperclass() != null && !c.getSuperclass().equals(Object.class)) {
           parents.push(c.getSuperclass());
@@ -688,7 +705,9 @@ public class JsonViewSerializer extends JsonSerializer<JsonView> {
       while(!parents.isEmpty()) {
         Class c = parents.pop();
 
-        Stream.of(c.getDeclaredMethods()).forEach(m -> methods.add(m));
+        Stream<Method> parentMethods = Stream.of(c.getDeclaredMethods()).filter(method ->
+                methods.stream().filter(m -> m.getName().equals(method.getName()) && java.util.Arrays.equals(m.getParameterTypes(), method.getParameterTypes())).count() == 0);
+        parentMethods.forEach(method -> methods.add(method));
 
         if(c.getSuperclass() != null && !c.getSuperclass().equals(Object.class)) {
           parents.push(c.getSuperclass());
