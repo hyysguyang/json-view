@@ -1,3 +1,5 @@
+```text
+
 /**
  * 分批Hash对比两个集合
  * 优势：100%准确，可处理任意规模数据
@@ -209,3 +211,6 @@ const result = db.source_collection.aggregate([
     },
     { $out: "temp_source_hashes" }
 ], { allowDiskUse: true });
+
+
+```
